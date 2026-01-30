@@ -1,0 +1,1270 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Fighter - NPC Combat</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background: #111;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        #container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+        }
+
+        canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+        }
+
+        #gameCanvas {
+            z-index: 1;
+        }
+
+        #hudCanvas {
+            z-index: 5;
+            pointer-events: none;
+        }
+
+        #ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 10;
+            pointer-events: none;
+        }
+
+        .overlay-box {
+            background: rgba(0, 0, 0, 0.85);
+            color: #0f0;
+            padding: 40px;
+            border: 3px solid #0f0;
+            border-radius: 20px;
+            text-align: center;
+            pointer-events: auto;
+            max-width: 600px;
+        }
+
+        .difficulty-btn,
+        .plane-btn {
+            background: #000;
+            color: #0f0;
+            border: 2px solid #0f0;
+            padding: 15px 30px;
+            font-size: 20px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: 0.3s;
+            margin: 10px;
+            width: 280px;
+            text-transform: uppercase;
+        }
+
+        .difficulty-btn:hover,
+        .plane-btn:hover:not(:disabled) {
+            background: #0f0;
+            color: #000;
+            box-shadow: 0 0 20px #0f0;
+        }
+
+        .plane-btn.selected {
+            background: #0f0;
+            color: #000;
+        }
+
+        .plane-btn:disabled {
+            color: #555;
+            border-color: #555;
+            cursor: not-allowed;
+        }
+
+        h1 {
+            margin-top: 0;
+            letter-spacing: 4px;
+            color: #fff;
+            text-shadow: 0 0 10px #0f0;
+        }
+
+        .controls-hint {
+            font-size: 14px;
+            color: #aaa;
+            margin: 20px 0;
+            line-height: 1.6;
+        }
+
+        button {
+            background: #0f0;
+            color: #000;
+            border: none;
+            padding: 15px 40px;
+            font-size: 24px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: 0.3s;
+            text-transform: uppercase;
+        }
+
+        button:hover {
+            background: #fff;
+            box-shadow: 0 0 20px #0f0;
+        }
+
+        #loading-screen {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: #000;
+            color: #0f0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+            z-index: 20;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="container">
+        <div id="loading-screen">INITIALIZING HANGAR... 0%</div>
+
+        <div id="ui-layer" style="display: none;">
+            <div id="start-overlay" class="overlay-box">
+                <h1>FIGHTER ACE</h1>
+                <div id="money-display" style="font-size: 24px; margin-bottom: 20px;">MONEY: $<span
+                        id="ui-money">0</span></div>
+                <div style="display: flex; justify-content: space-around;">
+                    <div id="plane-selection">
+                        <p>SELECT AIRCRAFT</p>
+                        <button class="plane-btn selected" data-plane="MUSTANG">P-51 MUSTANG (FREE)</button><br>
+                        <button class="plane-btn" id="heinkel-btn" data-plane="HEINKEL" disabled>HE He 178
+                            ($1500)</button><br>
+                        <button class="plane-btn" id="boeing-btn" data-plane="BOEING" disabled>BOEING F-47
+                            ($2500)</button><br>
+                        <button class="plane-btn" id="b2-btn" data-plane="B2" disabled>B2 BOMBER ($3000)</button>
+                    </div>
+                    <div id="mode-selection">
+                        <p>SELECT DIFFICULTY</p>
+                        <button class="difficulty-btn" data-diff="ROOKIE">ROOKIE</button><br>
+                        <button class="difficulty-btn" data-diff="ACE">ACE</button><br>
+                        <button class="difficulty-btn" data-diff="ELITE">ELITE</button>
+                    </div>
+                </div>
+                <div id="controls-info">
+                    <div class="controls-hint" id="p1-controls">
+                        <b>CONTROLS (WASD)</b><br>
+                        W/S: Pitch | A/D: Roll/Turn<br>
+                        SPACE/CLICK: Fire | SHIFT/CTRL: Throttle<br>
+                        E: Missiles | Q: Bombs | F: Flares
+                    </div>
+                </div>
+            </div>
+
+            <div id="game-over-overlay" class="overlay-box" style="display: none;">
+                <h1 id="result-title">MISSION FAILED</h1>
+                <p id="result-msg">Aircraft Destroyed.</p>
+                <button id="return-btn">Return to Hangar</button>
+            </div>
+        </div>
+
+        <canvas id="gameCanvas"></canvas>
+        <canvas id="hudCanvas"></canvas>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+
+    <script>
+        const WORLD_SIZE = 240000;
+
+        const DIFFICULTIES = {
+            ROOKIE: {
+                name: 'ROOKIE',
+                speedMult: 0.7,
+                turnSpeed: 1.5,
+                accuracy: 0.94,
+                fireRate: 250,
+                health: 60
+            },
+            ACE: {
+                name: 'ACE',
+                speedMult: 1.0,
+                turnSpeed: 2.5,
+                accuracy: 0.97,
+                fireRate: 120,
+                health: 100
+            },
+            ELITE: {
+                name: 'ELITE',
+                speedMult: 1.3,
+                turnSpeed: 4.0,
+                accuracy: 0.992,
+                fireRate: 60,
+                health: 200
+            }
+        };
+        let currentDifficulty = DIFFICULTIES.ACE;
+
+        const PLANES = {
+            MUSTANG: {
+                name: 'P-51 MUSTANG',
+                modelFile: 'plane.glb',
+                maxSpeed: 140,
+                accel: 25,
+                missiles: 0,
+                price: 0,
+                ammo: 1000,
+                fireRate: 60
+            },
+            HEINKEL: {
+                name: 'HEINKEL He 178',
+                modelFile: 'plane2.glb',
+                maxSpeed: 300,
+                accel: 45,
+                missiles: 4,
+                price: 1500,
+                ammo: 1000,
+                fireRate: 60
+            },
+            BOEING: {
+                name: 'BOEING F-47',
+                modelFile: 'plane3.glb',
+                maxSpeed: 450,
+                accel: 75,
+                missiles: 8,
+                price: 0,
+                ammo: 3000,
+                fireRate: 30,
+                hasFlares: true
+            },
+            B2: {
+                name: 'B2 BOMBER',
+                modelFile: 'plane4.glb',
+                maxSpeed: 400,
+                accel: 100,
+                missiles: 10,
+                bombs: 10,
+                price: 3000,
+                ammo: 3000,
+                fireRate: 30,
+                stealth: true,
+                hasFlares: true
+            }
+        };
+        let selectedPlane = PLANES.MUSTANG;
+        let sessionMoney = 0;
+        let planeModels = {};
+
+        let gameActive = false;
+        let gameState = 'DOGFIGHT';
+        let player = null;
+        let npcs = [];
+        let bullets = [];
+        let missiles = [];
+        let bombs = [];
+        let flares = [];
+        const keys = {};
+
+        const bulletGeometry = new THREE.CylinderGeometry(12.0, 12.0, 100, 8); // Even bigger bullets
+        bulletGeometry.rotateX(Math.PI / 2);
+        const bulletMaterial = new THREE.MeshBasicMaterial({ color: 0xffcc00 });
+
+        const missileGeometry = new THREE.CylinderGeometry(25.0, 25.0, 250, 8);
+        missileGeometry.rotateX(Math.PI / 2);
+        const missileMaterial = new THREE.MeshBasicMaterial({ color: 0xff3300 });
+
+        const bombGeometry = new THREE.SphereGeometry(40, 16, 16);
+        const bombMaterial = new THREE.MeshStandardMaterial({ color: 0x333333 });
+
+        const flareGeometry = new THREE.SphereGeometry(15, 8, 8);
+        const flareMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff });
+
+        const gameCanvas = document.getElementById('gameCanvas');
+        const hudCanvas = document.getElementById('hudCanvas');
+        const hudCtx = hudCanvas.getContext('2d');
+        const loadingScreen = document.getElementById('loading-screen');
+        const uiLayer = document.getElementById('ui-layer');
+        const startOverlay = document.getElementById('start-overlay');
+        const gameOverOverlay = document.getElementById('game-over-overlay');
+
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x6699cc);
+
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, WORLD_SIZE);
+        const clock = new THREE.Clock();
+        const renderer = new THREE.WebGLRenderer({ canvas: gameCanvas, antialias: true });
+        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.setSize(window.innerWidth, window.innerHeight);
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            hudCanvas.width = window.innerWidth;
+            hudCanvas.height = window.innerHeight;
+        }
+        window.addEventListener('resize', onWindowResize);
+        onWindowResize();
+
+        window.addEventListener('keydown', e => {
+            keys[e.code] = true;
+            if (e.code === 'Tab') e.preventDefault();
+        });
+        window.addEventListener('keyup', e => keys[e.code] = false);
+        window.addEventListener('mousedown', e => { if (e.button === 0) keys['Mouse0'] = true; });
+        window.addEventListener('mouseup', e => { if (e.button === 0) keys['Mouse0'] = false; });
+
+        document.querySelectorAll('.plane-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                if (btn.disabled) return;
+                const planeKey = btn.getAttribute('data-plane');
+                selectedPlane = PLANES[planeKey];
+
+                document.querySelectorAll('.plane-btn').forEach(b => b.classList.remove('selected'));
+                btn.classList.add('selected');
+            });
+        });
+
+        document.querySelectorAll('.difficulty-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const diffKey = btn.getAttribute('data-diff');
+                currentDifficulty = DIFFICULTIES[diffKey];
+
+                startOverlay.style.display = 'none';
+                gameActive = true;
+                setupGameEntities();
+            });
+        });
+
+        document.getElementById('return-btn').addEventListener('click', () => {
+            resetToHangar();
+        });
+
+        function updateMoneyUI() {
+            document.getElementById('ui-money').innerText = sessionMoney;
+
+            const updateBtn = (id, plane) => {
+                const btn = document.getElementById(id);
+                if (!btn) return;
+                if (sessionMoney >= plane.price) {
+                    btn.disabled = false;
+                } else {
+                    btn.disabled = true;
+                    if (selectedPlane === plane) {
+                        selectedPlane = PLANES.MUSTANG;
+                        document.querySelectorAll('.plane-btn').forEach(b => b.classList.remove('selected'));
+                        document.querySelector('[data-plane="MUSTANG"]').classList.add('selected');
+                    }
+                }
+            };
+
+            updateBtn('heinkel-btn', PLANES.HEINKEL);
+            updateBtn('boeing-btn', PLANES.BOEING);
+            updateBtn('b2-btn', PLANES.B2);
+        }
+
+        function resetToHangar() {
+            gameActive = false;
+            gameState = 'DOGFIGHT';
+
+            // Cleanup
+            if (player) {
+                scene.remove(player.mesh);
+                player = null;
+            }
+            npcs.forEach(n => scene.remove(n.mesh));
+            npcs = [];
+            bullets.forEach(b => scene.remove(b.mesh));
+            bullets = [];
+            missiles.forEach(m => scene.remove(m.mesh));
+            missiles = [];
+
+            updateMoneyUI();
+            gameOverOverlay.style.display = 'none';
+            startOverlay.style.display = 'block';
+            uiLayer.style.display = 'flex';
+            document.exitPointerLock();
+        }
+
+        function setupGameEntities() {
+            player = new Aircraft(0); // Player 1
+            spawnNPC();
+        }
+
+        function fireMissile(owner) {
+            const forward = new THREE.Vector3(0, 0, 1).applyEuler(owner.rotation);
+            const pos = owner.position.clone().add(forward.clone().multiplyScalar(50));
+
+            const mMesh = new THREE.Mesh(missileGeometry, missileMaterial);
+            mMesh.position.copy(pos);
+            mMesh.quaternion.setFromEuler(owner.rotation);
+            scene.add(mMesh);
+
+            missiles.push({
+                pos: pos,
+                vel: forward.clone().multiplyScalar(60000),
+                owner: owner,
+                mesh: mMesh,
+                life: 1.0
+            });
+        }
+
+        function spawnNPC() {
+            let config = PLANES.MUSTANG;
+            const r = Math.random();
+            if (currentDifficulty.name === 'ROOKIE') {
+                if (r < 0.8) config = PLANES.MUSTANG;
+                else if (r < 0.925) config = PLANES.HEINKEL;
+                else if (r < 0.975) config = PLANES.BOEING;
+                else config = PLANES.B2;
+            } else if (currentDifficulty.name === 'ACE') {
+                if (r < 0.4) config = PLANES.MUSTANG;
+                else if (r < 0.7) config = PLANES.HEINKEL;
+                else if (r < 0.9) config = PLANES.BOEING;
+                else config = PLANES.B2;
+            } else { // ELITE
+                if (r < 0.1) config = PLANES.MUSTANG;
+                else if (r < 0.3) config = PLANES.HEINKEL;
+                else if (r < 0.6) config = PLANES.BOEING;
+                else config = PLANES.B2;
+            }
+
+            const newNpc = new Aircraft(1, config);
+            // Randomize spawn position for subsequent NPCs on the second runway
+            if (npcs.length > 0) {
+                newNpc.position.set(
+                    300 + (Math.random() - 0.5) * 60,
+                    15,
+                    2550 + Math.random() * 100
+                );
+                newNpc.speed = 0;
+                newNpc.yaw = 0;
+                newNpc.mesh.position.copy(newNpc.position);
+            }
+            npcs.push(newNpc);
+        }
+
+        function getTerrainHeight(x, z) {
+            const d = Math.sqrt(x * x + z * z);
+            // More varied terrain with multiple frequencies
+            // Scaled up 50% in both width and height
+            let h = 0;
+            h += Math.sin(x * 0.0004 / 1.5) * Math.cos(z * 0.0004 / 1.5) * 1200 * 1.5; // Large mountains
+            h += Math.sin(x * 0.001 / 1.5) * Math.cos(z * 0.001 / 1.5) * 300 * 1.5;   // Medium hills
+            h += Math.sin(x * 0.003 / 1.5) * Math.sin(z * 0.003 / 1.5) * 30 * 1.5;    // Small bumps
+
+            // Flatten the center area for the runway
+            const dx = Math.max(0, Math.abs(x - 150) - 600); // Wider flat zone
+            const dz = Math.max(0, Math.abs(z - 3000) - 1500); // Longer flat zone
+            const runwayDist = Math.sqrt(dx * dx + dz * dz);
+            if (runwayDist < 500) {
+                h = 0; // Perfectly flat in the core area
+            } else if (runwayDist < 1500) {
+                h *= (runwayDist - 500) / 1000;
+            }
+
+            if (d > WORLD_SIZE * 0.45) h += (d - WORLD_SIZE * 0.45) * 2.5;
+            return h;
+        }
+
+        function createWorld() {
+            // Increased resolution for the larger world
+            const geometry = new THREE.PlaneGeometry(WORLD_SIZE, WORLD_SIZE, 256, 256);
+            const positions = geometry.attributes.position;
+            for (let i = 0; i < positions.count; i++) {
+                const x = positions.getX(i);
+                const z = positions.getY(i);
+                positions.setZ(i, getTerrainHeight(x, -z));
+            }
+            geometry.computeVertexNormals();
+            const material = new THREE.MeshStandardMaterial({ color: 0x447744, flatShading: true });
+            const terrain = new THREE.Mesh(geometry, material);
+            terrain.rotation.x = -Math.PI / 2;
+            scene.add(terrain);
+
+
+            function createRunway(x, z) {
+                const runwayGroup = new THREE.Group();
+                const rwGeo = new THREE.PlaneGeometry(100, 1000);
+                const runway = new THREE.Mesh(rwGeo, new THREE.MeshStandardMaterial({ color: 0x222222 }));
+                runway.rotation.x = -Math.PI / 2;
+                runwayGroup.add(runway);
+                for (let i = -500; i <= 500; i += 50) {
+                    const light = new THREE.Mesh(new THREE.SphereGeometry(3), new THREE.MeshBasicMaterial({ color: 0x00ff00 }));
+                    light.position.set(-55, 5, i);
+                    runwayGroup.add(light);
+                    const lightR = light.clone(); lightR.position.x = 55;
+                    runwayGroup.add(lightR);
+                }
+                runwayGroup.position.set(x, 10, z);
+                scene.add(runwayGroup);
+            }
+
+            createRunway(0, 3000); // Player Runway
+            createRunway(300, 3000); // NPC Runway
+
+            scene.add(new THREE.AmbientLight(0xffffff, 0.8));
+            const sun = new THREE.DirectionalLight(0xffffff, 1.2);
+            sun.position.set(5000, 10000, 5000);
+            scene.add(sun);
+        }
+
+        class Aircraft {
+            constructor(type = 0, config = null) {
+                // type: 0 = P1, 1 = NPC
+                this.type = type;
+                this.config = config || (type === 0 ? selectedPlane : PLANES.MUSTANG);
+                this.mesh = new THREE.Group();
+
+                const model = planeModels[this.config.modelFile];
+                if (model) {
+                    this.mesh.add(model.clone());
+                } else {
+                    const color = (type === 1) ? 0xff0000 : 0x0000ff;
+                    const placeholder = new THREE.Mesh(
+                        new THREE.BoxGeometry(4, 2, 10),
+                        new THREE.MeshStandardMaterial({ color: color })
+                    );
+                    this.mesh.add(placeholder);
+                }
+
+                scene.add(this.mesh);
+                this.reset();
+            }
+
+            reset() {
+                if (this.type === 0) {
+                    this.position = new THREE.Vector3(0, 15, 2600); // On runway 1
+                    this.health = 100;
+                } else if (this.type === 1) {
+                    this.position = new THREE.Vector3(300, 15, 2600); // On runway 2
+                    this.health = currentDifficulty.health;
+                }
+
+                this.rotation = new THREE.Euler(0, 0, 0, 'YXZ');
+                this.speed = 0; // Start parked
+                this.pitch = 0;
+                this.roll = 0;
+                this.yaw = 0;
+                this.velocity = new THREE.Vector3();
+                this.ammo = this.config.ammo || 1000;
+                this.lastShot = 0;
+                this.maxMissiles = this.config.missiles;
+                this.missiles = this.maxMissiles;
+                this.lastMissile = 0;
+
+                this.maxBombs = this.config.bombs || 0;
+                this.bombs = this.maxBombs;
+                this.lastBomb = 0;
+
+                this.maxFlares = this.config.hasFlares ? 10 : 0;
+                this.flares = this.maxFlares;
+                this.lastFlare = 0;
+
+                this.spawnTime = Date.now();
+                this.isDead = false;
+                this.fuel = 100;
+            }
+
+            isImmune() {
+                if (this.type !== 1) return false;
+                return (Date.now() - this.spawnTime) < 3000;
+            }
+
+            update(dt) {
+                if (this.isDead) return;
+
+                if (this.type === 1) this.updateAI(dt);
+                else this.updatePlayer(dt);
+
+                const fuelRate = (this.type === 0 && keys['ShiftLeft']) ? 0.33 : 0.11;
+                if (this.fuel > 0) {
+                    this.fuel -= fuelRate * dt;
+                    if (this.fuel < 0) this.fuel = 0;
+                }
+
+                const forward = new THREE.Vector3(0, 0, 1).applyEuler(this.rotation);
+
+                // Speed mechanics
+                let accel = (this.fuel > 0) ? this.config.accel : 0;
+                if (this.type === 1) {
+                    // NPC speed scaling
+                    const targetSpeed = 60 * currentDifficulty.speedMult;
+                    const accelRate = (this.speed < 30) ? 30 : 15; // Fast takeoff acceleration
+                    if (this.speed < targetSpeed) this.speed += accelRate * dt;
+                    else if (this.speed > targetSpeed + 20) this.speed -= 10 * dt;
+                }
+
+                this.speed -= forward.y * accel * dt; // Dive/Climb
+                this.speed -= this.speed * 0.0005; // Drag
+
+                if (this.speed < 20 && this.position.y > 30) this.pitch += 0.1 * dt; // Stall only when in air
+
+                const maxSpeed = (this.type === 1) ? this.config.maxSpeed * currentDifficulty.speedMult : this.config.maxSpeed;
+                this.speed = THREE.MathUtils.clamp(this.speed, 0, maxSpeed);
+
+                // Turn logic: banking results in yaw change (turn)
+                this.yaw -= this.roll * 0.4 * dt;
+
+                this.rotation.set(this.pitch, this.yaw, this.roll, 'YXZ');
+
+                const targetVelocity = forward.clone().multiplyScalar(this.speed * 50);
+                this.velocity.lerp(targetVelocity, dt * 0.7);
+                this.position.add(this.velocity.clone().multiplyScalar(dt));
+
+                this.mesh.position.copy(this.position);
+                this.mesh.rotation.copy(this.rotation);
+
+                const h = getTerrainHeight(this.position.x, this.position.z);
+                if (this.position.y < h + 5) {
+                    if (this.type === 0 && gameState === 'LANDING' && Math.abs(this.position.x) < 50 && Math.abs(this.position.z - 3000) < 500) {
+                        this.checkLanding();
+                    } else {
+                        this.die("Crashed into terrain.");
+                    }
+                }
+
+                if (this.position.length() > WORLD_SIZE * 0.49) {
+                    this.yaw += Math.PI * dt;
+                }
+            }
+
+            updatePlayer(dt) {
+                const rotSpeed = 2.5 * dt;
+
+                if (keys['KeyW']) this.pitch -= rotSpeed; // Nose Up
+                if (keys['KeyS']) this.pitch += rotSpeed; // Nose Down
+
+                // Rolling with limits and auto-level
+                let targetRoll = 0;
+
+                if (keys['KeyA']) targetRoll = -0.8;
+                else if (keys['KeyD']) targetRoll = 0.8;
+
+                if (keys['KeyA'] || keys['KeyD']) {
+                    this.roll = THREE.MathUtils.lerp(this.roll, targetRoll, 4 * dt);
+                } else {
+                    this.roll = THREE.MathUtils.lerp(this.roll, 0, 2 * dt); // Slower auto-level
+                }
+
+                if (keys['ShiftLeft']) this.speed += this.config.accel * 1.5 * dt;
+                if (keys['ControlLeft']) this.speed -= this.config.accel * 1.5 * dt;
+                if (keys['Space'] || keys['Mouse0']) this.shoot();
+
+                if (keys['KeyE']) {
+                    this.shootMissile();
+                    keys['KeyE'] = false; // Debounce
+                }
+
+                if (keys['KeyQ']) {
+                    this.shootBomb();
+                    keys['KeyQ'] = false; // Debounce
+                }
+
+                if (keys['KeyF']) {
+                    this.shootFlare();
+                    keys['KeyF'] = false; // Debounce
+                }
+
+                this.pitch = THREE.MathUtils.clamp(this.pitch, -1.5, 1.5);
+            }
+
+            shootMissile() {
+                if (this.missiles > 0 && Date.now() - this.lastMissile > 1000) {
+                    fireMissile(this);
+                    this.missiles--;
+                    this.lastMissile = Date.now();
+                    showNotification(`MISSILE AWAY! (${this.missiles} LEFT)`);
+                }
+            }
+
+            shootBomb() {
+                if (this.bombs > 0 && Date.now() - this.lastBomb > 2000) {
+                    const pos = this.position.clone().add(new THREE.Vector3(0, -10, 0));
+                    const bMesh = new THREE.Mesh(bombGeometry, bombMaterial);
+                    bMesh.position.copy(pos);
+                    scene.add(bMesh);
+
+                    bombs.push({
+                        pos: pos,
+                        vel: this.velocity.clone().multiplyScalar(0.5).add(new THREE.Vector3(0, -100, 0)),
+                        mesh: bMesh,
+                        owner: this,
+                        life: 10.0
+                    });
+
+                    this.bombs--;
+                    this.lastBomb = Date.now();
+                    showNotification(`BOMB DROPPED! (${this.bombs} LEFT)`);
+                }
+            }
+
+            shootFlare() {
+                if (this.flares > 0 && Date.now() - this.lastFlare > 500) {
+                    const pos = this.position.clone();
+                    const fMesh = new THREE.Mesh(flareGeometry, flareMaterial);
+                    fMesh.position.copy(pos);
+                    scene.add(fMesh);
+
+                    flares.push({
+                        pos: pos,
+                        vel: this.velocity.clone().multiplyScalar(-0.2).add(new THREE.Vector3((Math.random() - 0.5) * 500, (Math.random() - 0.5) * 500, (Math.random() - 0.5) * 500)),
+                        mesh: fMesh,
+                        life: 3.0
+                    });
+
+                    this.flares--;
+                    this.lastFlare = Date.now();
+                    showNotification(`FLARE DEPLOYED! (${this.flares} LEFT)`);
+                }
+            }
+
+            updateAI(dt) {
+                if (!player) return;
+
+                const stats = currentDifficulty;
+
+                if (this.speed < 25) { // Earlier takeoff
+                    this.pitch = THREE.MathUtils.lerp(this.pitch, -0.1, dt); // Slight pull up for takeoff
+                    this.roll = THREE.MathUtils.lerp(this.roll, 0, dt);
+                    return;
+                }
+                const forward = new THREE.Vector3(0, 0, 1).applyEuler(this.rotation);
+
+                // 1. Terrain Avoidance (Priority)
+                const lookAheadDist = 4000;
+                const checkSteps = 8;
+                let maxTerrainHeight = 0;
+
+                // Check multiple paths (forward, slightly left, slightly right)
+                const directions = [
+                    forward.clone(),
+                    forward.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), 0.2),
+                    forward.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), -0.2)
+                ];
+
+                for (const dir of directions) {
+                    for (let i = 1; i <= checkSteps; i++) {
+                        const checkPos = this.position.clone().add(dir.clone().multiplyScalar(lookAheadDist * (i / checkSteps)));
+                        maxTerrainHeight = Math.max(maxTerrainHeight, getTerrainHeight(checkPos.x, checkPos.z));
+                    }
+                }
+
+                const safetyBuffer = 800;
+                const dangerZone = maxTerrainHeight + safetyBuffer;
+
+                let terrainAvoidanceActive = false;
+                if (this.position.y < dangerZone) {
+                    terrainAvoidanceActive = true;
+                    const pullUpStrength = THREE.MathUtils.mapLinear(THREE.MathUtils.clamp(dangerZone - this.position.y, 0, 1000), 0, 1000, 2, 8);
+                    this.pitch = THREE.MathUtils.lerp(this.pitch, -1.2, pullUpStrength * dt); // Pull up more aggressively
+
+                    // If extremely close, also roll to turn away
+                    if (this.position.y < maxTerrainHeight + 300) {
+                        this.roll = THREE.MathUtils.lerp(this.roll, 1.2, 5 * dt);
+                    }
+                }
+
+                // 2. Chasing Player
+                if (!terrainAvoidanceActive) {
+                    const targetPos = player.position.clone();
+                    // Lead pursuit
+                    const distanceToPlayer = this.position.distanceTo(targetPos);
+                    const leadTime = distanceToPlayer / 2000;
+                    const leadPos = targetPos.add(player.velocity.clone().multiplyScalar(leadTime * 0.5));
+
+                    const localTarget = leadPos.clone().applyMatrix4(new THREE.Matrix4().copy(this.mesh.matrixWorld).invert());
+
+                    const turnSpeed = stats.turnSpeed;
+
+                    let targetRoll = 0;
+                    if (localTarget.x > 20) targetRoll = -1.0;
+                    else if (localTarget.x < -20) targetRoll = 1.0;
+                    this.roll = THREE.MathUtils.lerp(this.roll, targetRoll, turnSpeed * dt);
+
+                    let targetPitch = 0;
+                    if (localTarget.y > 20) targetPitch = -0.8;
+                    else if (localTarget.y < -20) targetPitch = 0.8;
+                    else targetPitch = 0;
+                    this.pitch = THREE.MathUtils.lerp(this.pitch, targetPitch, turnSpeed * dt);
+
+                    if (localTarget.z < 0) {
+                        this.roll = THREE.MathUtils.lerp(this.roll, 1.2, turnSpeed * dt);
+                        this.pitch = THREE.MathUtils.lerp(this.pitch, -0.5, turnSpeed * dt);
+                    }
+                }
+
+                // 3. Shooting
+                const targetPos = player.position.clone();
+                const dir = targetPos.sub(this.position).normalize();
+                const dot = forward.dot(dir);
+                const dist = this.position.distanceTo(player.position);
+
+                if (dist < 4000 && dot > stats.accuracy) {
+                    this.shoot(stats.fireRate);
+                }
+            }
+
+            shoot(overrideFireRate) {
+                const now = Date.now();
+                const fireInterval = overrideFireRate || this.config.fireRate || 60;
+                if (now - this.lastShot > fireInterval && this.ammo > 0) {
+                    const forward = new THREE.Vector3(0, 0, 1).applyEuler(this.rotation);
+                    const pos = this.position.clone().add(forward.clone().multiplyScalar(25));
+
+                    const bMesh = new THREE.Mesh(bulletGeometry, bulletMaterial);
+                    bMesh.position.copy(pos);
+                    bMesh.quaternion.setFromEuler(this.rotation);
+                    scene.add(bMesh);
+
+                    bullets.push({
+                        pos: pos,
+                        vel: forward.clone().multiplyScalar(40000), // Ultra-fast bullets
+                        owner: this,
+                        mesh: bMesh,
+                        life: 2.0 // Reduced life as they travel much further now
+                    });
+                    this.lastShot = now;
+                    this.ammo--;
+                }
+            }
+
+            checkLanding() {
+                if (this.speed < 55) {
+                    gameActive = false;
+                    document.exitPointerLock();
+                    showResult("MISSION SUCCESS", "Safe landing achieved.");
+                } else {
+                    this.die("Landing speed too high!");
+                }
+            }
+
+            die(reason) {
+                if (this.isImmune()) return;
+                this.isDead = true;
+                this.health = 0;
+                if (this.type === 1) { // NPC
+                    scene.remove(this.mesh);
+                    npcs = npcs.filter(n => n !== this);
+
+                    sessionMoney += 100;
+                    updateMoneyUI();
+
+                    if (npcs.length === 0) {
+                        gameState = 'LANDING';
+                        showNotification("ALL TARGETS DESTROYED. RETURN TO BASE.");
+                    } else {
+                        showNotification("TARGET DESTROYED.");
+                    }
+                } else {
+                    gameActive = false;
+                    document.exitPointerLock();
+                    showResult("MISSION FAILED", reason);
+                }
+            }
+        }
+
+        function drawHUD() {
+            hudCtx.clearRect(0, 0, hudCanvas.width, hudCanvas.height);
+            if (!player) return;
+            drawPlayerHUD(player, camera, 0, 0, hudCanvas.width, hudCanvas.height);
+            drawDirectionArrow(player);
+            drawEnemyBoxes();
+        }
+
+        function drawEnemyBoxes() {
+            npcs.forEach(npc => {
+                if (npc.isDead || npc.isImmune()) return;
+
+                const pos = npc.position.clone();
+                pos.project(camera);
+
+                if (pos.z > -1 && pos.z < 1) {
+                    const x = (pos.x + 1) * hudCanvas.width / 2;
+                    const y = (-pos.y + 1) * hudCanvas.height / 2;
+
+                    const dist = player.position.distanceTo(npc.position);
+                    // "Hug" size based on distance and FOV
+                    let size = (200 * hudCanvas.height) / (dist * 1.5);
+                    size = Math.max(20, Math.min(size, hudCanvas.height * 0.5)); // Cap at 50% screen height
+
+                    if (x > -size && x < hudCanvas.width + size && y > -size && y < hudCanvas.height + size) {
+                        hudCtx.strokeStyle = '#f00';
+                        hudCtx.lineWidth = 2;
+                        // Draw a square box
+                        hudCtx.strokeRect(x - size / 2, y - size / 2, size, size);
+
+                        // Draw distance below
+                        hudCtx.fillStyle = '#f00';
+                        hudCtx.font = 'bold 12px monospace';
+                        hudCtx.textAlign = 'center';
+                        hudCtx.fillText(`${Math.round(dist)}m`, x, y + size / 2 + 15);
+                    }
+                }
+            });
+        }
+
+        function drawDirectionArrow(p) {
+            p.mesh.updateMatrixWorld();
+            let targetPos = new THREE.Vector3(0, 10, 3000); // Default: Runway
+            let nearestEnemy = null;
+            let minDist = Infinity;
+
+            npcs.forEach(npc => {
+                if (!npc.isDead && !npc.isImmune()) {
+                    const dist = p.position.distanceTo(npc.position);
+                    if (dist < minDist) {
+                        minDist = dist;
+                        nearestEnemy = npc;
+                    }
+                }
+            });
+
+            if (nearestEnemy) {
+                targetPos = nearestEnemy.position.clone();
+            }
+
+            // Calculate relative direction
+            const localTarget = targetPos.clone().applyMatrix4(p.mesh.matrixWorld.clone().invert());
+            const angle = Math.atan2(localTarget.x, localTarget.z);
+
+            // Draw arrow in bottom right
+            const centerX = hudCanvas.width - 80;
+            const centerY = hudCanvas.height - 80;
+            const radius = 30;
+
+            hudCtx.save();
+            hudCtx.translate(centerX, centerY);
+            hudCtx.rotate(angle);
+
+            // Draw Arrow
+            hudCtx.beginPath();
+            hudCtx.moveTo(0, -radius); // Tip
+            hudCtx.lineTo(radius * 0.6, radius * 0.6);
+            hudCtx.lineTo(0, radius * 0.2);
+            hudCtx.lineTo(-radius * 0.6, radius * 0.6);
+            hudCtx.closePath();
+
+            hudCtx.fillStyle = nearestEnemy ? 'rgba(255, 0, 0, 0.8)' : 'rgba(0, 255, 0, 0.8)';
+            hudCtx.fill();
+            hudCtx.strokeStyle = '#fff';
+            hudCtx.lineWidth = 2;
+            hudCtx.stroke();
+
+            hudCtx.restore();
+
+            // Label
+            hudCtx.fillStyle = '#fff';
+            hudCtx.font = 'bold 14px monospace';
+            hudCtx.textAlign = 'center';
+            hudCtx.fillText(nearestEnemy ? 'NEAREST ENEMY' : 'RETURN TO BASE', centerX, centerY + radius + 25);
+        }
+
+        function drawPlayerHUD(p, cam, ox, oy, w, h) {
+            hudCtx.save();
+            hudCtx.translate(ox, oy);
+            hudCtx.fillStyle = '#0f0';
+            hudCtx.font = 'bold 18px monospace';
+
+            hudCtx.fillText(`DIFFICULTY: ${currentDifficulty.name}`, 20, 35);
+            hudCtx.fillText(`SPD: ${Math.round(p.speed * 2)} KT`, 20, 60);
+            hudCtx.fillText(`ALT: ${Math.round(p.position.y * 3.3)} FT`, 20, 85);
+            hudCtx.fillText(`AMMO: ${p.ammo}`, 20, 110);
+            hudCtx.fillText(`FUEL: ${Math.round(p.fuel)}%`, 20, 135);
+            hudCtx.fillText(`HP:`, 20, 160);
+            hudCtx.strokeStyle = '#0f0';
+            hudCtx.strokeRect(60, 145, 100, 15);
+            hudCtx.fillRect(60, 145, Math.max(0, p.health), 15);
+
+            if (npcs.length > 0) {
+                hudCtx.fillText(`TARGETS: ${npcs.length}`, 20, 185);
+            }
+
+            hudCtx.fillText(`MONEY: $${sessionMoney}`, 20, 210);
+            if (p.maxMissiles > 0) {
+                hudCtx.fillText(`MISSILES: ${p.missiles}`, 20, 235);
+            }
+
+            hudCtx.restore();
+        }
+
+        let notifications = [];
+        function showNotification(text) {
+            notifications.push({ text, time: Date.now() });
+        }
+
+        function showResult(title, msg) {
+            gameOverOverlay.style.display = 'block';
+            document.getElementById('result-title').innerText = title;
+            document.getElementById('result-msg').innerText = msg;
+            uiLayer.style.display = 'flex';
+        }
+
+        async function initGame() {
+            createWorld();
+
+            const loader = new THREE.GLTFLoader();
+            const modelsToLoad = [...new Set(Object.values(PLANES).map(p => p.modelFile))];
+
+            for (const file of modelsToLoad) {
+                try {
+                    const gltf = await new Promise((res, rej) => {
+                        loader.load(file, res, (xhr) => {
+                            if (xhr.lengthComputable) {
+                                loadingScreen.innerText = `LOADING ${file}... ${Math.round(xhr.loaded / xhr.total * 100)}%`;
+                            }
+                        }, rej);
+                    });
+
+                    const model = gltf.scene;
+                    const box = new THREE.Box3().setFromObject(model);
+                    const size = box.getSize(new THREE.Vector3()).length();
+                    model.scale.setScalar(200 / size);
+
+                    if (file === 'plane2.glb' || file === 'plane4.glb') {
+                        model.rotation.y = Math.PI; // Fix: face forward
+                    } else if (file === 'plane3.glb') {
+                        model.rotation.y = Math.PI + 89.53; // Boeing faces forward at PI/2
+                    } else {
+                        model.rotation.y = Math.PI / 2; // Mustang faces forward at PI/2
+                    }
+
+                    planeModels[file] = model
+                } catch (e) {
+                    console.warn(`Failed to load ${file}, will use placeholder.`, e);
+                }
+            }
+
+            updateMoneyUI();
+            loadingScreen.style.display = 'none';
+            uiLayer.style.display = 'flex';
+            animate();
+        }
+
+        let camMode = 0;
+        window.addEventListener('keydown', e => {
+            if (e.code === 'KeyC') {
+                camMode = (camMode + 1) % 3;
+                console.log("CamMode:", camMode);
+            }
+            if (e.code === 'KeyR' && gameActive) {
+                spawnNPC();
+                showNotification("REINFORCEMENTS ARRIVED!");
+            }
+        });
+
+        function updateCamera(cam, target) {
+            if (!target) return;
+            if (camMode === 0) { // Chase
+                const offset = new THREE.Vector3(0, 15, -50).applyEuler(target.rotation);
+                cam.position.lerp(target.position.clone().add(offset), 0.1);
+                cam.lookAt(target.position.clone().add(new THREE.Vector3(0, 5, 0)));
+            } else if (camMode === 1) { // Cockpit
+                const offset = new THREE.Vector3(0, 3, 10).applyEuler(target.rotation);
+                cam.position.copy(target.position.clone().add(offset));
+                cam.lookAt(target.position.clone().add(new THREE.Vector3(0, 0, 40).applyEuler(target.rotation)));
+            } else { // Top
+                cam.position.set(target.position.x, target.position.y + 500, target.position.z);
+                cam.lookAt(target.position);
+            }
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            const dt = Math.min(clock.getDelta(), 0.1);
+
+            if (gameActive) {
+                if (player) player.update(dt);
+                npcs.forEach(n => n.update(dt));
+
+                for (let i = bullets.length - 1; i >= 0; i--) {
+                    const b = bullets[i];
+                    const prevPos = b.pos.clone();
+                    b.pos.add(b.vel.clone().multiplyScalar(dt));
+                    b.mesh.position.copy(b.pos);
+                    b.life -= dt;
+
+                    let removed = false;
+                    if (b.life <= 0) removed = true;
+                    else {
+                        const targets = [player, ...npcs];
+                        for (const t of targets) {
+                            if (t && b.owner !== t) {
+                                // High-speed collision check using segment-point distance
+                                const segment = new THREE.Vector3().subVectors(b.pos, prevPos);
+                                const lenSq = segment.lengthSq();
+                                let tParam = 0;
+                                if (lenSq > 0) {
+                                    tParam = new THREE.Vector3().subVectors(t.position, prevPos).dot(segment) / lenSq;
+                                    tParam = Math.max(0, Math.min(1, tParam));
+                                }
+                                const closestPoint = prevPos.clone().add(segment.multiplyScalar(tParam));
+                                if (closestPoint.distanceTo(t.position) < 200) { // Slightly increased hit radius for better gameplay
+                                    if (!t.isImmune()) {
+                                        t.health -= 12;
+                                        if (t.health <= 0) t.die("Shot down.");
+                                    }
+                                    removed = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    if (removed) {
+                        scene.remove(b.mesh);
+                        bullets.splice(i, 1);
+                    }
+                }
+
+                for (let i = bombs.length - 1; i >= 0; i--) {
+                    const b = bombs[i];
+                    b.vel.y -= 980 * dt; // Gravity
+                    b.pos.add(b.vel.clone().multiplyScalar(dt));
+                    b.mesh.position.copy(b.pos);
+                    b.life -= dt;
+
+                    let removed = false;
+                    const h = getTerrainHeight(b.pos.x, b.pos.z);
+                    if (b.pos.y < h) {
+                        // Explosion logic
+                        const explosionRadius = 1000;
+                        const targets = [player, ...npcs];
+                        targets.forEach(t => {
+                            if (t && !t.isDead && !t.isImmune()) {
+                                const d = b.pos.distanceTo(t.position);
+                                if (d < explosionRadius) {
+                                    t.health -= (1 - d / explosionRadius) * 200;
+                                    if (t.health <= 0) t.die("Destroyed by bomb.");
+                                }
+                            }
+                        });
+                        removed = true;
+                        showNotification("BOOM!");
+                    } else if (b.life <= 0) {
+                        removed = true;
+                    }
+
+                    if (removed) {
+                        scene.remove(b.mesh);
+                        bombs.splice(i, 1);
+                    }
+                }
+
+                for (let i = flares.length - 1; i >= 0; i--) {
+                    const f = flares[i];
+                    f.vel.multiplyScalar(0.98); // Drag
+                    f.pos.add(f.vel.clone().multiplyScalar(dt));
+                    f.mesh.position.copy(f.pos);
+                    f.life -= dt;
+
+                    if (f.life <= 0) {
+                        scene.remove(f.mesh);
+                        flares.splice(i, 1);
+                    }
+                }
+
+                for (let i = missiles.length - 1; i >= 0; i--) {
+                    const m = missiles[i];
+
+                    // Heat-seeking tracking
+                    let target = null;
+                    let minDist = 20000;
+
+                    // Check flares first
+                    flares.forEach(f => {
+                        const d = m.pos.distanceTo(f.pos);
+                        if (d < 5000 && d < minDist) {
+                            minDist = d;
+                            target = f; // Targeting flare
+                        }
+                    });
+
+                    if (!target) {
+                        const potentialTargets = (m.owner.type === 0) ? npcs : (player ? [player] : []);
+                        potentialTargets.forEach(t => {
+                            if (t && !t.isDead && !t.config.stealth && !t.isImmune()) {
+                                const d = m.pos.distanceTo(t.position);
+                                if (d < minDist) {
+                                    minDist = d;
+                                    target = t;
+                                }
+                            }
+                        });
+                    }
+
+                    if (target) {
+                        const targetPos = target.position || target.pos;
+                        const desiredDir = new THREE.Vector3().subVectors(targetPos, m.pos).normalize();
+                        const currentVelDir = m.vel.clone().normalize();
+                        currentVelDir.lerp(desiredDir, dt * 15.0);
+                        m.vel.copy(currentVelDir.multiplyScalar(60000));
+                        m.mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), currentVelDir);
+                    }
+
+                    m.pos.add(m.vel.clone().multiplyScalar(dt));
+                    m.mesh.position.copy(m.pos);
+                    m.life -= dt;
+
+                    let removed = false;
+                    if (m.life <= 0) removed = true;
+                    else {
+                        const targets = [player, ...npcs];
+                        for (const t of targets) {
+                            if (t && m.owner !== t) {
+                                if (m.pos.distanceTo(t.position) < 500) {
+                                    if (!t.isImmune()) {
+                                        t.health = 0;
+                                        t.die("Destroyed by missile.");
+                                    }
+                                    removed = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    if (removed) {
+                        scene.remove(m.mesh);
+                        missiles.splice(i, 1);
+                    }
+                }
+            }
+
+            updateCamera(camera, player);
+            renderer.setViewport(0, 0, window.innerWidth, window.innerHeight);
+            renderer.setScissorTest(false);
+            renderer.render(scene, camera);
+
+            drawHUD();
+            const now = Date.now();
+            notifications = notifications.filter(n => now - n.time < 5000);
+            hudCtx.textAlign = 'center'; hudCtx.font = 'bold 30px monospace';
+            notifications.forEach((n, i) => {
+                hudCtx.fillStyle = `rgba(255, 255, 255, ${1 - (now - n.time) / 5000})`;
+                hudCtx.fillText(n.text, hudCanvas.width / 2, 150 + i * 45);
+            });
+            hudCtx.textAlign = 'left';
+        }
+
+        initGame();
+    </script>
+</body>
+
+</html>
